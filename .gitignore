@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Dados locais (DuckDB/Parquet)
+data/
+
+# Dados brutos de staging (CSV do MetaTrader 5)
+dump/
+

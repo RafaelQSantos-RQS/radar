@@ -1,0 +1,42 @@
+[project]
+name = "radar"
+version = "0.1.0"
+description = "Motor de apoio à decisão para day trading na B3"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "duckdb>=1.5.5",
+    "fastapi>=0.141.1",
+    "numpy>=2.0.0",
+    "pandas>=3.0.5",
+    "pyarrow>=25.0.0",
+    "python-multipart>=0.0.20",
+    "uvicorn>=0.35.0",
+]
+
+[project.scripts]
+radar-api = "radar.api.app:run"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.0",
+    "pytest>=8.0.0",
+    "ruff>=0.11.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/radar"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+ignore = ["DTZ001", "DTZ005"]
