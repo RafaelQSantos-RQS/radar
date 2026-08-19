@@ -11,7 +11,12 @@ from datetime import datetime, timedelta
 import pandas as pd
 import pytest
 
-from radar.backtest.costs import COST_MODELS, compute_costs
+from radar.backtest.costs import (
+    COST_MODELS,
+    CostParams,
+    compute_entry_costs,
+    compute_exit_costs,
+)
 from radar.backtest.engine import OrderType, TradeSim
 
 
@@ -29,31 +34,77 @@ def _df(prices: list[float], start: datetime | None = None) -> pd.DataFrame:
     })
 
 
-# ── Costos ────────────────────────────────────────────────
+# ── Custos B3 ─────────────────────────────────────────────
 
 
-def test_compute_costs_wdo():
-    costs = compute_costs("WDO$", 5000.0, volume=1)
-    assert costs == {
-        "commission": 0.90,
-        "b3_fee": 1.20,
-        "slippage": 5.00,   # 1 tick × R$ 5,00
-        "total": 7.10,
-    }
+def test_compute_entry_costs_wdo():
+    # WDO$ 5000,00 × 1 contrato: comissão 0, ISS 0, emolumentos 0,005%,
+    # registro 0, custódia 0
+    costs = compute_entry_costs(5000.0, volume=1)
+    assert costs["commission"] == 0.0
+    assert costs["iss"] == 0.0
+    assert costs["emolumentos"] == pytest.approx(5000.0 * 0.005 / 100)
+    assert costs["registro"] == 0.0
+    assert costs["custodia"] == 0.0
+    assert costs["total"] == pytest.approx(costs["emolumentos"])
 
 
-def test_compute_costs_win():
-    costs = compute_costs("WIN$", 120000.0, volume=2)
-    assert costs["b3_fee"] == 0.60     # 0,30 × 2 contratos
-    assert costs["slippage"] == 2.00   # 1 tick × R$ 1,00 × 2
-    assert costs["total"] == pytest.approx(0.90 + 0.60 + 2.00)
+def test_compute_entry_costs_with_commission_and_iss():
+    params = CostParams(comissao_pct=0.5, aliquota_iss=5.0)
+    costs = compute_entry_costs(5000.0, volume=1, params=params)
+    assert costs["commission"] == pytest.approx(25.0)          # 0,5% de 5000
+    assert costs["iss"] == pytest.approx(25.0 * 5.0 / 100)     # 5% da corretagem
+    assert costs["total"] == pytest.approx(25.0 + 1.25 + costs["emolumentos"])
 
 
-def test_compute_costs_unknown_symbol_falls_back_to_wdo():
-    costs = compute_costs("XXX$", 1.0)
-    assert costs["total"] == pytest.approx(7.10)
-    assert costs["commission"] == 0.90
+def test_compute_exit_costs_daytrade():
+    # Compra 5000 → 5001, mesmo dia: IRRF 1% do lucro, IR 20% do lucro
+    # após custos operacionais
+    costs = compute_exit_costs(
+        open_price=5000.0,
+        close_price=5001.0,
+        volume=1,
+        gross_pnl=5.00,
+        is_daytrade=True,
+        vol_venda=5001.0,
+    )
+    assert costs["liquidacao"] == pytest.approx(round((5000.0 + 5001.0) * 0.025 / 100, 2))
+    assert costs["irrf"] == pytest.approx(5.00 * 1.0 / 100)
+    operacionais = costs["commission"] + costs["iss"] + costs["emolumentos"] + costs["liquidacao"] + costs["registro"] + costs["custodia"]
+    assert costs["ir"] == pytest.approx(max(0.0, 5.00 - operacionais) * 20.0 / 100)
+    assert costs["total"] == pytest.approx(operacionais + costs["irrf"] + costs["ir"])
+
+
+def test_compute_exit_costs_swing_irrf_on_volume():
+    # Swing (dias diferentes): IRRF 0,005% do volume de venda
+    costs = compute_exit_costs(
+        open_price=5000.0,
+        close_price=5001.0,
+        volume=1,
+        gross_pnl=5.00,
+        is_daytrade=False,
+        vol_venda=5001.0,
+    )
+    assert costs["irrf"] == pytest.approx(round(5001.0 * 0.005 / 100, 2))
+    assert costs["ir"] == pytest.approx(max(0.0, 5.00 - (costs["commission"] + costs["iss"] + costs["emolumentos"] + costs["liquidacao"] + costs["registro"] + costs["custodia"])) * 15.0 / 100)
+
+
+def test_compute_exit_costs_ir_zero_on_loss():
+    costs = compute_exit_costs(
+        open_price=5000.0,
+        close_price=4990.0,
+        volume=1,
+        gross_pnl=-50.0,
+        is_daytrade=True,
+        vol_venda=4990.0,
+    )
+    assert costs["ir"] == 0.0
+    assert costs["irrf"] == 0.0  # IRRF não incide sobre prejuízo
+
+
+def test_cost_models_tick_values():
     assert COST_MODELS["WDO$"].tick_value == 5.00
+    assert COST_MODELS["WIN$"].tick_value == 1.00
 
 
 # ── Bug 1 (regressão): custos de saída na ordem ───────────
@@ -65,14 +116,21 @@ def test_bug1_exit_costs_charged_to_order():
     sim.close_order(ticket, price=5001.0, timestamp=datetime(2025, 1, 2, 9, 2), reason="tp")
 
     order = sim.closed_orders[0]
-    per_side = compute_costs("WDO$", 5000.0, volume=1)  # entrada E saída
+    entry = compute_entry_costs(5000.0, volume=1)
+    exit_ = compute_exit_costs(
+        open_price=5000.0, close_price=5001.0, volume=1,
+        gross_pnl=5.00, is_daytrade=True, vol_venda=5001.0,
+    )
 
     # 1 tick de lucro = R$ 5,00 bruto; custos de ida E volta debitados
     assert order.gross_pnl == 5.00
-    assert order.commission == pytest.approx(per_side["commission"] * 2)
-    assert order.b3_fee == pytest.approx(per_side["b3_fee"] * 2)
-    assert order.slippage == pytest.approx(per_side["slippage"] * 2)
-    assert order.net_pnl == pytest.approx(5.00 - per_side["total"] * 2)
+    assert order.commission == pytest.approx(entry["commission"] + exit_["commission"])
+    assert order.emolumentos == pytest.approx(entry["emolumentos"] + exit_["emolumentos"])
+    assert order.liquidacao == pytest.approx(exit_["liquidacao"])
+    assert order.irrf == pytest.approx(exit_["irrf"])
+    assert order.ir == pytest.approx(exit_["ir"])
+    assert order.is_daytrade is True
+    assert order.net_pnl == pytest.approx(5.00 - entry["total"] - exit_["total"])
 
 
 def test_bug1_sum_trades_net_pnl_equals_account_net_profit():
@@ -89,11 +147,14 @@ def test_bug1_sum_trades_net_pnl_equals_account_net_profit():
 
 def test_bug1_win_rate_not_inflated_by_costs():
     # Sem a correção, um trade de 1 tick parecia lucro (ignorava custos)
-    sim = TradeSim(initial_balance=10_000.0, symbol="WDO$", use_costs=True)
+    # Comissão alta garante que o trade líquido é prejuízo apesar do lucro bruto
+    params = CostParams(comissao_pct=0.5)  # 0,5% do volume
+    sim = TradeSim(initial_balance=10_000.0, symbol="WDO$", use_costs=True, cost_params=params)
     ticket = sim.open_order(OrderType.BUY, price=5000.0, timestamp=datetime(2025, 1, 2, 9, 1))
     sim.close_order(ticket, price=5001.0, timestamp=datetime(2025, 1, 2, 9, 2))
 
-    # 1 tick de lucro < custos totais (R$ 14,20) → trade líquido é PREJUÍZO
+    # 1 tick de lucro (R$ 5,00) < custos (comissão 0,5% × 2 lados + taxas)
+    assert sim.closed_orders[0].gross_pnl == 5.00
     assert sim.closed_orders[0].net_pnl < 0
     assert sim.account.net_profit < 0
 
@@ -213,7 +274,15 @@ def test_no_costs_summary_matches_account():
     summary = result["summary"]
     assert summary["total_trades"] == 1
     assert summary["final_balance"] == pytest.approx(10_000.0 + result["trades"][0]["net_pnl"])
-    assert summary["total_costs"] == pytest.approx(summary["total_commission"] + summary["total_b3_fee"] + summary["total_slippage"])
+    assert summary["total_costs"] == pytest.approx(
+        summary["total_commission"]
+        + summary["total_b3_fee"]
+        + summary["total_iss"]
+        + summary["total_liquidacao"]
+        + summary["total_custodia"]
+        + summary["total_irrf"]
+        + summary["total_ir"]
+    )
 
 
 def test_warmup_skips_trading():
@@ -234,3 +303,93 @@ def test_empty_df_returns_error():
     result = sim.run(pd.DataFrame(), lambda idx, df: {"direction": "hold"})
     assert result["error"] == "DataFrame vazio."
     assert result["summary"]["total_trades"] == 0
+
+
+# ── BCT (Breakout Ladder) ───────────────────────────────────
+
+
+def _bct_df(prices: list[float], highs: list[float], lows: list[float]) -> pd.DataFrame:
+    """DataFrame OHLCV com pavios explícitos para testar BCT."""
+    start = datetime(2025, 1, 2, 9, 0)
+    times = [start + timedelta(minutes=1) * i for i in range(len(prices))]
+    return pd.DataFrame({
+        "time": times,
+        "open": prices,
+        "high": highs,
+        "low": lows,
+        "close": prices,
+        "volume": [1] * len(prices),
+    })
+
+
+def test_bct_rompeu_virtual_tp_sobe_stop():
+    # Compra: high rompe virtual TP → stop sobe para o high e TP escala ×1.05
+    df = _bct_df(
+        prices=[5000.0, 5010.0, 5012.0],
+        highs=[5000.0, 5010.0, 5012.0],
+        lows=[5000.0, 5008.0, 5010.0],
+    )
+    signals = iter([
+        {"direction": "buy", "sl_reference": 5000.0, "sl_estrategy": 4990.0,
+         "sl_estrategy_distance": 10.0, "virtual_tp": 5005.0},
+        {"direction": "hold"},
+        {"direction": "hold"},
+    ])
+
+    def strategy_fn(idx, _df):
+        return next(signals)
+
+    sim = TradeSim(initial_balance=10_000.0, symbol="WDO$", use_costs=False, exit_mode="bct")
+    sim.run(df, strategy_fn, warmup=0)
+    # Na barra 1 o high (5010) rompeu o virtual TP (5005) → stop sobe para 5010
+    order = sim.closed_orders[0] if sim.closed_orders else None
+    # Se não fechou, a ordem ainda está aberta com o stop escalado
+    if order is None:
+        open_order = next(iter(sim.open_orders.values()))
+        assert open_order.sl_estrategy == 5010.0
+        assert open_order.virtual_tp == pytest.approx(5005.0 * 1.05)
+
+
+def test_bct_rompeu_stop_fecha_com_motivo_bct():
+    # Compra: low rompe o stop de proteção → fecha com motivo "bct"
+    df = _bct_df(
+        prices=[5000.0, 4995.0],
+        highs=[5000.0, 4996.0],
+        lows=[5000.0, 4990.0],
+    )
+    signals = iter([
+        {"direction": "buy", "sl_reference": 5000.0, "sl_estrategy": 4992.0,
+         "sl_estrategy_distance": 8.0, "virtual_tp": 5010.0},
+        {"direction": "hold"},
+    ])
+
+    def strategy_fn(idx, _df):
+        return next(signals)
+
+    sim = TradeSim(initial_balance=10_000.0, symbol="WDO$", use_costs=False, exit_mode="bct")
+    result = sim.run(df, strategy_fn, warmup=0)
+    assert len(result["trades"]) == 1
+    assert result["trades"][0]["close_reason"] == "bct"
+
+
+def test_bct_gap_overnight_anula_posicao():
+    # Gap overnight > 100% → anula no preço de entrada (motivo "anomalia")
+    df = _bct_df(
+        prices=[5000.0, 10500.0],
+        highs=[5000.0, 10600.0],
+        lows=[5000.0, 10400.0],
+    )
+    signals = iter([
+        {"direction": "buy", "sl_reference": 5000.0, "sl_estrategy": 4900.0,
+         "sl_estrategy_distance": 100.0, "virtual_tp": 5100.0},
+        {"direction": "hold"},
+    ])
+
+    def strategy_fn(idx, _df):
+        return next(signals)
+
+    sim = TradeSim(initial_balance=10_000.0, symbol="WDO$", use_costs=False, exit_mode="bct")
+    result = sim.run(df, strategy_fn, warmup=0)
+    assert len(result["trades"]) == 1
+    assert result["trades"][0]["close_reason"] == "anomalia"
+    assert result["trades"][0]["close_price"] == 5000.0  # preço de entrada

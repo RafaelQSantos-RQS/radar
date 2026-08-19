@@ -24,13 +24,12 @@ def test_signal_sem_candles_retorna_400() -> None:
     client = TestClient(create_app())
     response = client.post(
         "/v1/signal",
-        json={"symbol": "WDO$", "timeframe": "M1", "strategy": "bb_breakout"},
+        json={"symbol": "WDO$", "timeframe": "M1"},
     )
     assert response.status_code == 400
 
 
-def test_strategies_implementado() -> None:
+def test_strategies_removido() -> None:
     client = TestClient(create_app())
     response = client.get("/v1/strategies")
-    assert response.status_code == 200
-    assert len(response.json()) == 4
+    assert response.status_code == 404

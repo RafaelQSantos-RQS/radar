@@ -1,11 +1,15 @@
-"""Estratégias do Radar."""
+"""Estratégias do Radar — estratégia única QuantScore."""
 
-from radar.strategy.defaults import BUILT_IN_STRATEGIES, get_strategy
-from radar.strategy.engine import evaluate_rule, evaluate_rules
+from radar.strategy.quantscore import (
+    DEFAULT_PARAMS,
+    QuantScoreParams,
+    compute_score,
+    quantscore_strategy,
+)
 
 __all__ = [
-    "BUILT_IN_STRATEGIES",
-    "evaluate_rule",
-    "evaluate_rules",
-    "get_strategy",
+    "DEFAULT_PARAMS",
+    "QuantScoreParams",
+    "compute_score",
+    "quantscore_strategy",
 ]

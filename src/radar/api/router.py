@@ -13,13 +13,15 @@ from radar.api.schemas import (
     OptimizeRequest,
     SignalRequest,
     SignalResponse,
-    StrategyInfo,
 )
-from radar.api.service import evaluate_signal, list_strategies, run_backtest
+from radar.api.service import evaluate_signal, run_backtest
 from radar.config import DB_PATH
 from radar.data.ingest import parse_csv, store_candles
+from radar.optimizer.service import create_optimizer_service
 
 router = APIRouter(prefix="/v1")
+
+optimizer = create_optimizer_service()
 
 
 @router.post("/ingest", response_model=IngestResponse)
@@ -41,64 +43,63 @@ def ingest(
     )
 
 
-@router.get("/strategies", response_model=list[StrategyInfo])
-def strategies() -> list[StrategyInfo]:
-    """Lista as estratégias rule-based disponíveis."""
-    return [StrategyInfo(**s) for s in list_strategies()]
-
-
 @router.post("/signal", response_model=SignalResponse)
 def signal(request: SignalRequest) -> SignalResponse:
-    """Avalia as regras da estratégia na última barra."""
+    """Avalia o QuantScore na última barra."""
     try:
         result = evaluate_signal(
             symbol=request.symbol,
             timeframe=request.timeframe,
-            strategy=request.strategy,
+            params=request.params,
             candles=request.candles,
         )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return SignalResponse(
-        symbol=request.symbol,
-        timeframe=request.timeframe,
-        strategy=request.strategy,
-        signal=result["signal"],
-        confidence=result["confidence"],
-        justification=result["justification"],
-        at=result["at"],
-    )
+    return SignalResponse(symbol=request.symbol, timeframe=request.timeframe, **result)
 
 
 @router.post("/backtest", response_model=BacktestResponse)
 def backtest(request: BacktestRequest) -> BacktestResponse:
-    """Roda o backtest da estratégia com custos B3 e devolve métricas."""
+    """Roda o backtest QuantScore com custos B3 e devolve métricas."""
     try:
         result = run_backtest(
-            strategy=request.strategy,
             symbol=request.symbol,
             timeframe=request.timeframe,
             start=request.start,
             end=request.end,
-            costs=request.costs,
+            params=request.params,
+            costs_params=request.costs_params,
         )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return BacktestResponse(**result)
 
 
 @router.post("/optimize", response_model=OptimizeJob)
-def optimize(_request: OptimizeRequest) -> OptimizeJob:
-    raise HTTPException(status_code=501, detail="Validação ainda não implementada")
+def optimize(request: OptimizeRequest) -> OptimizeJob:
+    """Cria um job de otimização por grid paramétrico do QuantScore."""
+    try:
+        job_id = optimizer.create_job(
+            symbol=request.symbol,
+            timeframe=request.timeframe,
+            param_grid=request.param_grid,
+            start=request.start,
+            end=request.end,
+            costs_params=request.costs_params,
+            db_path=DB_PATH,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return OptimizeJob(job_id=job_id)
 
 
 @router.get("/jobs/{job_id}", response_model=JobStatus)
-def job_status(_job_id: str) -> JobStatus:
-    raise HTTPException(status_code=501, detail="Validação ainda não implementada")
+def job_status(job_id: str) -> JobStatus:
+    """Consulta o status de um job de otimização."""
+    job = optimizer.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"job {job_id} não encontrado")
+    return JobStatus(**job)
 
 
 __all__ = ["router"]

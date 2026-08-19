@@ -1,8 +1,12 @@
 """Testes das métricas de desempenho."""
 
+from datetime import date
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
+from radar.benchmarks import benchmark_returns, load_benchmarks
 from radar.metrics import (
     annualization_periods,
     calmar_ratio,
@@ -89,3 +93,37 @@ def test_expected_payoff():
     assert result["avg_loss"] == pytest.approx(-50.0)
     assert result["expected_payoff"] == pytest.approx((2 / 3 * 100) - (1 / 3 * 50), rel=1e-2)
     assert expected_payoff([])["total_trades"] == 0
+
+
+# ── Benchmarks ────────────────────────────────────────────
+
+
+def test_benchmark_returns_available():
+    # Período coberto pelos dados seed (2024-2025)
+    result = benchmark_returns(date(2024, 1, 1), date(2024, 12, 31))
+    assert result["selic"] is not None
+    assert result["ipca"] is not None
+    assert result["ibov"] is not None
+    # SELIC 2024 = 12 × 1,05% composto
+    assert result["selic"] == pytest.approx((1.0105 ** 12) - 1, rel=1e-3)
+
+
+def test_benchmark_returns_unavailable():
+    # Período sem dados (2020) → None sem erro
+    result = benchmark_returns(date(2020, 1, 1), date(2020, 12, 31))
+    assert result == {"selic": None, "ipca": None, "ibov": None}
+
+
+def test_benchmark_returns_missing_seed_file():
+    result = benchmark_returns(
+        date(2024, 1, 1), date(2024, 12, 31),
+        seed_path=Path("/tmp/nao-existe-benchmarks.json"),
+    )
+    assert result == {"selic": None, "ipca": None, "ibov": None}
+
+
+def test_load_benchmarks_parses_series():
+    series = load_benchmarks()
+    assert set(series.keys()) == {"selic", "ipca", "ibov"}
+    assert len(series["selic"]) == 24  # 2024 + 2025
+    assert series["selic"][0]["date"] == date(2024, 1, 1)

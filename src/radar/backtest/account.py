@@ -27,7 +27,11 @@ class AccountInfo:
         profit: P&L flutuante atual.
         total_commission: Comissão acumulada.
         total_b3_fee: Taxas B3 (emolumentos + registro) acumuladas.
-        total_slippage: Slippage acumulado.
+        total_iss: ISS acumulado.
+        total_liquidacao: Taxa de liquidação acumulada.
+        total_custodia: Taxa de custódia acumulada.
+        total_irrf: IRRF acumulado.
+        total_ir: Imposto de renda acumulado.
         equity_curve: Série temporal do equity (para métricas).
     """
 
@@ -39,7 +43,11 @@ class AccountInfo:
     profit: float = 0.0
     total_commission: float = 0.0
     total_b3_fee: float = 0.0
-    total_slippage: float = 0.0
+    total_iss: float = 0.0
+    total_liquidacao: float = 0.0
+    total_custodia: float = 0.0
+    total_irrf: float = 0.0
+    total_ir: float = 0.0
     equity_curve: list[dict] = field(default_factory=list)
 
     def snapshot(self, timestamp: datetime) -> None:
@@ -61,7 +69,15 @@ class AccountInfo:
     @property
     def total_costs(self) -> float:
         """Custos totais acumulados (R$)."""
-        return self.total_commission + self.total_b3_fee + self.total_slippage
+        return (
+            self.total_commission
+            + self.total_b3_fee
+            + self.total_iss
+            + self.total_liquidacao
+            + self.total_custodia
+            + self.total_irrf
+            + self.total_ir
+        )
 
     @property
     def net_profit(self) -> float:

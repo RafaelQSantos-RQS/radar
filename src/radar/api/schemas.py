@@ -11,7 +11,10 @@ SIGNALS = ("COMPRA", "VENDA", "NEUTRO")
 class SignalRequest(BaseModel):
     symbol: str = Field(examples=["WDO$"])
     timeframe: str = Field(examples=["M1"])
-    strategy: str = Field(examples=["bb_breakout"])
+    params: dict[str, Any] | None = Field(
+        default=None,
+        description="Parâmetros do QuantScore (opcional — usa defaults).",
+    )
     candles: list[dict[str, Any]] | None = Field(
         default=None,
         description="Candles inline (últimos N) — alternativa à leitura do banco.",
@@ -21,48 +24,53 @@ class SignalRequest(BaseModel):
 class SignalResponse(BaseModel):
     symbol: str
     timeframe: str
-    strategy: str
     signal: str  # COMPRA | VENDA | NEUTRO
+    score: float = 0.0
+    components: dict[str, Any] = Field(default_factory=dict)
     confidence: float = Field(ge=0.0, le=1.0)
     justification: str = ""
     at: datetime
 
 
-class StrategyInfo(BaseModel):
-    id: str
-    name: str
-    description: str = ""
-    rules: list[dict] = Field(default_factory=list)
-
-
 class BacktestRequest(BaseModel):
-    strategy: str = Field(examples=["bb_breakout"])
     symbol: str = Field(examples=["WDO$"])
     timeframe: str = Field(examples=["M1"])
     start: datetime | None = None
     end: datetime | None = None
-    costs: bool = True
+    params: dict[str, Any] | None = Field(
+        default=None,
+        description="Parâmetros do QuantScore (opcional — usa defaults).",
+    )
+    costs_params: dict[str, Any] | None = Field(
+        default=None,
+        description="Parâmetros de custos B3 (opcional — usa defaults).",
+    )
 
 
 class BacktestResponse(BaseModel):
-    strategy: str
     symbol: str
     timeframe: str
-    trades: int = 0
+    trades: list[dict[str, Any]] = Field(default_factory=list)
     net_profit: float = 0.0
     sharpe: float = 0.0
     max_drawdown: float = 0.0
     win_rate: float = 0.0
+    profit_factor: float = 0.0
+    total_costs: float = 0.0
     equity_curve: list[float] = Field(default_factory=list)
+    benchmarks: dict[str, float | None] = Field(default_factory=dict)
+    params: dict[str, Any] = Field(default_factory=dict)
 
 
 class OptimizeRequest(BaseModel):
-    strategy: str = Field(examples=["bb_breakout"])
     symbol: str = Field(examples=["WDO$"])
     timeframe: str = Field(examples=["M1"])
     param_grid: dict[str, list[Any]] = Field(
-        examples=[{"lookback": [20, 40], "entry_mult": [1.5, 2.0]}]
+        examples=[{"stop_inicial": [1.0, 2.0], "min_score_compra": [60, 70]}]
     )
+    start: datetime | None = None
+    end: datetime | None = None
+    costs_params: dict[str, Any] | None = None
 
 
 class OptimizeJob(BaseModel):
@@ -93,5 +101,4 @@ __all__ = [
     "OptimizeRequest",
     "SignalRequest",
     "SignalResponse",
-    "StrategyInfo",
 ]
